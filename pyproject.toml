@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling>=1.24.2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "onrobot-api"
+version = "0.1.0"
+description = "Python API for OnRobot gripper control via XML-RPC."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "OnRobot API Contributors" }]
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/profi-robotics/onrobot-api"
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["onrobot"]

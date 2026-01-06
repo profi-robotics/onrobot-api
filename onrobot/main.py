@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
-from device import Device
-from twofg import TWOFG
-from vgc10 import VG
-from rg2 import RG
+from onrobot.device import Device
+from onrobot.twofg import TWOFG
+from onrobot.vgc10 import VG
+from onrobot.rg2 import RG
 
 if __name__ == '__main__':
     device = Device()

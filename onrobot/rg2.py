@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import time
-from device import Device
+from onrobot.device import Device
 import numpy as np
 
 '''
