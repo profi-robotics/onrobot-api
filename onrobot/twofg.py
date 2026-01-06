@@ -170,11 +170,12 @@ class TWOFG():
         if self.isConnected(t_index) is False:
             return CONN_ERR
 
-        #Sanity check
+        # Sanity check
         max = self.get_max_ext_width(t_index)
         min = self.get_min_ext_width(t_index)
         if t_width > max or t_width < min:
-            print("Invalid 2FG width parameter, " + str(max)+" - "+str(min) +" is valid only")
+            print("Invalid 2FG width parameter, " +
+                  str(max)+" - "+str(min) + " is valid only")
             return RET_FAIL
 
         if n_force > 140 or n_force < 20:
@@ -185,7 +186,8 @@ class TWOFG():
             print("Invalid 2FG speed parameter, 10-100 is valid only")
             return RET_FAIL
 
-        self.cb.twofg_grip_external(t_index, float(t_width), int(n_force), int(p_speed))
+        self.cb.twofg_grip_external(t_index, float(
+            t_width), int(n_force), int(p_speed))
 
         if f_wait:
             tim_cnt = 0
@@ -198,7 +200,7 @@ class TWOFG():
                     print("2FG external grip command timeout")
                     break
             else:
-                #Grip detection
+                # Grip detection
                 grip_tim = 0
                 gripped = self.isGripped(t_index)
                 while (not gripped):
@@ -231,7 +233,8 @@ class TWOFG():
         max = self.get_max_ext_width(t_index)
         min = self.get_min_ext_width(t_index)
         if t_width > max or t_width < min:
-            print("Invalid 2FG diameter parameter, " + str(max)+" - "+str(min) +" is valid only")
+            print("Invalid 2FG diameter parameter, " +
+                  str(max)+" - "+str(min) + " is valid only")
             return RET_FAIL
 
         self.cb.twofg_grip_external(t_index, float(t_width), 100, 80)

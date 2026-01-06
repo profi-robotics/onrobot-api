@@ -10,7 +10,7 @@ XML-RPC library for controlling OnRobot devcies from Doosan robots
 Global_cbip holds the IP address of the compute box, needs to be defined by the end user
 '''
 
-#Device IDs
+# Device IDs
 VGC10_ID = 0x11
 
 # Connection
@@ -69,7 +69,7 @@ class VG():
                 vacB = self.getvacB(t_index)
                 tim_cnt += 1
                 if tim_cnt > 40:
-                    #Turn off channel that could not reach the level
+                    # Turn off channel that could not reach the level
                     if vacA < vacuumA:
                         self.release(t_index, True, False, False)
                     if vacB < vacuumB:
@@ -101,7 +101,7 @@ class VG():
 
         if waiting:
             if (channelA is True) and (channelB is False):
-                #Only wait for A channel
+                # Only wait for A channel
                 tim_cnt = 0
                 vacA = self.getvacA(t_index)
                 while (0.1 < vacA):
@@ -115,7 +115,7 @@ class VG():
                     return RET_OK
                 return RET_FAIL
             elif (channelA is False) and (channelB is True):
-                #Only wait for B channel
+                # Only wait for B channel
                 tim_cnt = 0
                 vacB = self.getvacB(t_index)
                 while (0.1 < vacB):
@@ -129,7 +129,7 @@ class VG():
                     return RET_OK
                 return RET_FAIL
             elif (channelA is True) and (channelB is True):
-                #Wait for both channels
+                # Wait for both channels
                 tim_cnt = 0
                 vacA = self.getvacA(t_index)
                 vacB = self.getvacB(t_index)
@@ -145,8 +145,8 @@ class VG():
                     return RET_OK
                 return RET_FAIL
             else:
-                #None of them were commanded to release but wait was True
-                #Why would you do this?
+                # None of them were commanded to release but wait was True
+                # Why would you do this?
                 return RET_OK
         else:
             return RET_OK
@@ -201,4 +201,5 @@ class VG():
 if __name__ == "__main__":
     device = Device()
     gripper_vgc10 = VG(device)
-    if gripper_vgc10.isConnected(): print('Connected!')
+    if gripper_vgc10.isConnected():
+        print('Connected!')

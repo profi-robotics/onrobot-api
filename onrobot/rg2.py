@@ -10,7 +10,7 @@ XML-RPC library for controlling OnRobot devcies from Doosan robots
 Global_cbip holds the IP address of the compute box, needs to be defined by the end user
 '''
 
-#Device IDs
+# Device IDs
 RG2_ID = 0x20
 
 # Connection
@@ -44,7 +44,7 @@ class RG():
         else:
             return True
 
-    #No grip detection (just move the gripper)
+    # No grip detection (just move the gripper)
     def move(self, t_index, twidth, tforce, fwait):
         '''
         Moves the gripper to the desired position
@@ -78,7 +78,7 @@ class RG():
         else:
             return RET_OK
 
-    #If wait then also detect grip at the end
+    # If wait then also detect grip at the end
     def grip(self, t_index, twidth, tforce, fwait):
         '''
         Makes a grip with the gripper to the desired position
@@ -106,7 +106,7 @@ class RG():
                     print("RG grip timeout")
                     break
             else:
-                #Grip detection
+                # Grip detection
                 grip_tim = 0
                 gripped = self.isGripped(t_index)
                 while (not gripped):
