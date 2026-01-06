@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import time
+import threading
 from onrobot.device import Device
 import numpy as np
 
@@ -27,6 +28,13 @@ class TWOFG():
 
     def __init__(self, dev):
         self.cb = dev.getCB()
+        self._lock = threading.Lock()  # Thread safety for XML-RPC calls
+
+    def _call_xmlrpc(self, method_name, *args):
+        """Thread-safe wrapper for XML-RPC calls."""
+        with self._lock:
+            method = getattr(self.cb, method_name)
+            return method(*args)
 
     def isConnected(self, t_index=0):
         '''
@@ -37,8 +45,9 @@ class TWOFG():
         @rtype: bool
         '''
         try:
-            IsTwoFG = self.cb.cb_is_device_connected(t_index, TWOFG_ID)
-        except TimeoutError:
+            IsTwoFG = self._call_xmlrpc(
+                'cb_is_device_connected', t_index, TWOFG_ID)
+        except (TimeoutError, Exception):
             IsTwoFG = False
 
         if IsTwoFG is False:
@@ -59,7 +68,7 @@ class TWOFG():
         '''
         if self.isConnected(t_index) is False:
             return CONN_ERR
-        return self.cb.twofg_get_busy(t_index)
+        return self._call_xmlrpc('twofg_get_busy', t_index)
 
     def isGripped(self, t_index=0):
         '''
@@ -73,7 +82,7 @@ class TWOFG():
         '''
         if self.isConnected(t_index) is False:
             return CONN_ERR
-        return self.cb.twofg_get_grip_detected(t_index)
+        return self._call_xmlrpc('twofg_get_grip_detected', t_index)
 
     def getStatus(self, t_index=0):
         '''
@@ -87,7 +96,7 @@ class TWOFG():
         '''
         if self.isConnected(t_index) is False:
             return CONN_ERR
-        status = self.cb.twofg_get_status(t_index)
+        status = self._call_xmlrpc('twofg_get_status', t_index)
         return status
 
     def get_ext_width(self, t_index=0):
@@ -100,7 +109,7 @@ class TWOFG():
         '''
         if self.isConnected(t_index) is False:
             return CONN_ERR
-        extWidth = self.cb.twofg_get_external_width(t_index)
+        extWidth = self._call_xmlrpc('twofg_get_external_width', t_index)
         return extWidth
 
     def get_min_ext_width(self, t_index=0):
@@ -113,7 +122,8 @@ class TWOFG():
         '''
         if self.isConnected(t_index) is False:
             return CONN_ERR
-        extMinWidth = self.cb.twofg_get_min_external_width(t_index)
+        extMinWidth = self._call_xmlrpc(
+            'twofg_get_min_external_width', t_index)
         return extMinWidth
 
     def get_max_ext_width(self, t_index=0):
@@ -126,7 +136,8 @@ class TWOFG():
         '''
         if self.isConnected(t_index) is False:
             return CONN_ERR
-        extMaxWidth = self.cb.twofg_get_max_external_width(t_index)
+        extMaxWidth = self._call_xmlrpc(
+            'twofg_get_max_external_width', t_index)
         return extMaxWidth
 
     def get_force(self, t_index=0):
@@ -139,7 +150,7 @@ class TWOFG():
         '''
         if self.isConnected(t_index) is False:
             return CONN_ERR
-        currForce = self.cb.twofg_get_force(t_index)
+        currForce = self._call_xmlrpc('twofg_get_force', t_index)
         return currForce
 
     def stop(self, t_index=0):
@@ -171,11 +182,18 @@ class TWOFG():
             return CONN_ERR
 
         # Sanity check
-        max = self.get_max_ext_width(t_index)
-        min = self.get_min_ext_width(t_index)
-        if t_width > max or t_width < min:
+        max_width = self.get_max_ext_width(t_index)
+        min_width = self.get_min_ext_width(t_index)
+
+        # Check if we got valid width limits (not error codes)
+        if max_width == CONN_ERR or min_width == CONN_ERR:
+            print(
+                "Unable to retrieve gripper width limits - gripper may not be properly configured")
+            return RET_FAIL
+
+        if t_width > max_width or t_width < min_width:
             print("Invalid 2FG width parameter, " +
-                  str(max)+" - "+str(min) + " is valid only")
+                  str(max_width)+" - "+str(min_width) + " is valid only")
             return RET_FAIL
 
         if n_force > 140 or n_force < 20:
@@ -186,7 +204,7 @@ class TWOFG():
             print("Invalid 2FG speed parameter, 10-100 is valid only")
             return RET_FAIL
 
-        self.cb.twofg_grip_external(t_index, float(
+        self._call_xmlrpc('twofg_grip_external', t_index, float(
             t_width), int(n_force), int(p_speed))
 
         if f_wait:
@@ -230,14 +248,22 @@ class TWOFG():
         if self.isConnected(t_index) is False:
             return CONN_ERR
 
-        max = self.get_max_ext_width(t_index)
-        min = self.get_min_ext_width(t_index)
-        if t_width > max or t_width < min:
-            print("Invalid 2FG diameter parameter, " +
-                  str(max)+" - "+str(min) + " is valid only")
+        max_width = self.get_max_ext_width(t_index)
+        min_width = self.get_min_ext_width(t_index)
+
+        # Check if we got valid width limits (not error codes)
+        if max_width == CONN_ERR or min_width == CONN_ERR:
+            print(
+                "Unable to retrieve gripper width limits - gripper may not be properly configured")
             return RET_FAIL
 
-        self.cb.twofg_grip_external(t_index, float(t_width), 100, 80)
+        if t_width > max_width or t_width < min_width:
+            print("Invalid 2FG diameter parameter, " +
+                  str(max_width)+" - "+str(min_width) + " is valid only")
+            return RET_FAIL
+
+        self._call_xmlrpc('twofg_grip_external', t_index,
+                          float(t_width), 100, 80)
 
         if f_wait:
             tim_cnt = 0
@@ -250,7 +276,7 @@ class TWOFG():
                     print("2FG external grip command timeout")
                     break
             else:
-                RET_OK
+                return RET_OK
             return RET_FAIL
         else:
             return RET_OK
