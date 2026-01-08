@@ -2,6 +2,8 @@
 
 import time
 import threading
+import urllib.error
+import urllib.request
 from onrobot.device import Device
 import numpy as np
 
@@ -29,12 +31,137 @@ class TWOFG():
     def __init__(self, dev):
         self.cb = dev.getCB()
         self._lock = threading.Lock()  # Thread safety for XML-RPC calls
+        self._cb_ip = getattr(dev, "Global_cbip", None)
+        self._status_client = None
 
     def _call_xmlrpc(self, method_name, *args):
         """Thread-safe wrapper for XML-RPC calls."""
         with self._lock:
             method = getattr(self.cb, method_name)
             return method(*args)
+
+    def _call_rest(self, path, timeout_s=2.0):
+        if not self._cb_ip:
+            raise RuntimeError("Compute box IP is not configured")
+        url = f"http://{self._cb_ip}/{path.lstrip('/')}"
+        with self._lock:
+            request = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(request, timeout=timeout_s) as response:
+                return response.read().decode("utf-8")
+
+    def start_status_stream(
+        self,
+        on_update=None,
+        timeout_s=2.0,
+    ):
+        if not self._cb_ip:
+            return False
+        if self._status_client is None:
+            from onrobot.status_client import OnRobotStatusClient
+            self._status_client = OnRobotStatusClient(
+                self._cb_ip,
+                on_update=on_update,
+            )
+        try:
+            self._status_client.connect(timeout_s=timeout_s)
+            return True
+        except Exception:
+            return False
+
+    def stop_status_stream(self):
+        client = self._status_client
+        if client is None:
+            return
+        client.disconnect()
+
+    def get_status_snapshot(self, t_index=0):
+        client = self._status_client
+        if client is None:
+            return None
+        return client.get_device_variable(device_id=t_index, product_code=TWOFG_ID)
+
+    def _normalize_finger_orientation(self, orientation):
+        if isinstance(orientation, bool):
+            return orientation
+        if isinstance(orientation, str):
+            cleaned = orientation.strip().lower()
+            if cleaned in {"outward", "out", "outside"}:
+                return True
+            if cleaned in {"inward", "in", "inside"}:
+                return False
+            return None
+        if isinstance(orientation, (int, float)):
+            value = int(orientation)
+            if value < 0:
+                return None
+            if value == 2:
+                return True
+            if value == 1:
+                return False
+            return bool(value)
+        return None
+
+    def get_finger_orientation(self, t_index=0):
+        '''
+        Returns with current finger orientation
+
+        @param t_index: The position of the device (0 for single, 1 for dual primary, 2 for dual secondary)
+        @return: Finger orientation flag (device-specific)
+        @rtype: int
+        '''
+        if self.isConnected(t_index) is False:
+            return CONN_ERR
+        try:
+            return self._call_xmlrpc('twofg_finger_orientation_outward', t_index)
+        except Exception:
+            return RET_FAIL
+
+    def get_finger_orientation_label(self, t_index=0):
+        '''
+        Returns finger orientation as a human-friendly label
+
+        @param t_index: The position of the device (0 for single, 1 for dual primary, 2 for dual secondary)
+        @return: "inward" or "outward" when available
+        @rtype: str
+        '''
+        raw = self.get_finger_orientation(t_index)
+        orientation = self._normalize_finger_orientation(raw)
+        if orientation is None:
+            return None
+        return "outward" if orientation else "inward"
+
+    def set_finger_orientation(self, t_index=0, orientation=None, outward=None):
+        '''
+        Sets finger orientation
+
+        @param t_index: The position of the device (0 for single, 1 for dual primary, 2 for dual secondary)
+        @param orientation: Orientation label ("inward"/"outward") or numeric flag
+        @param outward: Boolean flag for outward orientation (True=outward)
+        @rtype: int
+        @return: RET_OK on success, RET_FAIL on error
+        '''
+        if self.isConnected(t_index) is False:
+            return CONN_ERR
+        resolved = None
+        if outward is not None:
+            resolved = bool(outward)
+        else:
+            resolved = self._normalize_finger_orientation(orientation)
+        if resolved is None:
+            return RET_FAIL
+        try:
+            self._call_xmlrpc('twofg_set_finger_orientation', t_index, float(resolved))
+            return RET_OK
+        except Exception:
+            pass
+        try:
+            rest_value = "true" if resolved else "false"
+            self._call_rest(
+                f"api/dc/twofg/set_finger_orientation/{t_index}/{rest_value}"
+            )
+            return RET_OK
+        except (urllib.error.URLError, RuntimeError, Exception):
+            return RET_FAIL
 
     def isConnected(self, t_index=0):
         '''

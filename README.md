@@ -36,6 +36,26 @@ Modules:
 | get_force  | Returns current force on the gripper (in Newton) | - |
 | get_min_ext_width  | Returns minimum gripping width  | - |
 | get_max_ext_width  | Returns minimum gripping width  | - |
+| get_finger_orientation_label  | Returns `"inward"` or `"outward"` when available  | - |
+| set_finger_orientation  | Sets finger orientation (`"inward"`/`"outward"` or boolean flag)  | - |
+
+Note: `set_finger_orientation` falls back to the Compute Box REST endpoint
+`/api/dc/twofg/set_finger_orientation/{t_index}/{true|false}` when the XML-RPC
+method is not available.
+
+### Status stream (Socket.IO)
+
+The Compute Box publishes device status over Socket.IO. Use the helper to
+subscribe and read the latest gripper variables (width, force, orientation, etc):
+
+```python
+from onrobot.status_client import OnRobotStatusClient
+
+client = OnRobotStatusClient("192.168.101.180")
+client.connect()
+status = client.get_device_variable(device_id=0, product_code=0xC0)
+print(status)
+```
 
 ### **Input parameter explanation**
 

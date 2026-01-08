@@ -10,7 +10,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "OnRobot API Contributors" }]
-dependencies = []
+dependencies = [
+    "python-socketio>=5.11.0",
+    "websocket-client>=1.7.0",
+]
 
 [project.urls]
 Repository = "https://github.com/profi-robotics/onrobot-api"
