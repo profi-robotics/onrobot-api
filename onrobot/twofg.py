@@ -5,6 +5,7 @@ import threading
 import urllib.error
 import urllib.request
 from onrobot.device import Device
+from onrobot.gripper_profiles import get_gripper_profile
 import numpy as np
 
 '''
@@ -21,6 +22,8 @@ CONN_ERR = -2   # Connection failure
 RET_OK = 0      # Okay
 RET_FAIL = -1   # Error
 
+GRIPPER_PROFILE = get_gripper_profile("twofg7")
+
 
 class TWOFG():
     '''
@@ -33,6 +36,12 @@ class TWOFG():
         self._lock = threading.Lock()  # Thread safety for XML-RPC calls
         self._cb_ip = getattr(dev, "Global_cbip", None)
         self._status_client = None
+        self._profile = GRIPPER_PROFILE
+
+    @property
+    def profile(self):
+        """Return the gripper profile that defines the type defaults."""
+        return self._profile
 
     def _call_xmlrpc(self, method_name, *args):
         """Thread-safe wrapper for XML-RPC calls."""
@@ -291,7 +300,14 @@ class TWOFG():
             return CONN_ERR
         self.cb.twofg_stop(t_index)
 
-    def grip(self, t_index=0, t_width=20.0, n_force=20, p_speed=10, f_wait=True):
+    def grip(
+        self,
+        t_index=0,
+        t_width=GRIPPER_PROFILE.open_width_default,
+        n_force=GRIPPER_PROFILE.force_default,
+        p_speed=GRIPPER_PROFILE.speed_default,
+        f_wait=True,
+    ):
         '''
         Makes an external grip with the gripper to the desired position
 
@@ -308,6 +324,8 @@ class TWOFG():
         if self.isConnected(t_index) is False:
             return CONN_ERR
 
+        profile = self._profile
+
         # Sanity check
         max_width = self.get_max_ext_width(t_index)
         min_width = self.get_min_ext_width(t_index)
@@ -323,12 +341,17 @@ class TWOFG():
                   str(max_width)+" - "+str(min_width) + " is valid only")
             return RET_FAIL
 
-        if n_force > 140 or n_force < 20:
-            print("Invalid 2FG force parameter, 20-140 is valid only")
+        if n_force > profile.force_max or n_force < profile.force_min:
+            print(
+                "Invalid 2FG force parameter, "
+                f"{profile.force_min}-{profile.force_max} is valid only"
+            )
             return RET_FAIL
-
-        if p_speed > 100 or p_speed < 10:
-            print("Invalid 2FG speed parameter, 10-100 is valid only")
+        if p_speed > profile.speed_max or p_speed < profile.speed_min:
+            print(
+                "Invalid 2FG speed parameter, "
+                f"{profile.speed_min}-{profile.speed_max} is valid only"
+            )
             return RET_FAIL
 
         self._call_xmlrpc('twofg_grip_external', t_index, float(
