@@ -1,28 +1,37 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
+
+import logging
 import xmlrpc.client
 
+from onrobot.errors import OnRobotConnectionError
+
+LOGGER = logging.getLogger(__name__)
+
+
 class Device:
-    '''
-    Generic device object
-    '''
+    """Generic Compute Box device connection wrapper."""
+
     cb = None
 
-    def __init__(self, Global_cbip='192.168.1.1'):
-        #try to get Computebox IP address
+    def __init__(self, Global_cbip: str = "192.168.1.1"):  # noqa: N803
+        self.Global_cbip = Global_cbip
+
+    def get_compute_box(self):
+        """Return XML-RPC proxy to the configured Compute Box."""
         try:
-            self.Global_cbip = Global_cbip
-        except NameError:
-            print("Global_cbip is not defined!")
+            self.cb = xmlrpc.client.ServerProxy(f"http://{self.Global_cbip}:41414/")
+            return self.cb
+        except TimeoutError as exc:
+            LOGGER.error("Connection to Compute Box failed for %s", self.Global_cbip)
+            raise OnRobotConnectionError("Connection to Compute Box failed") from exc
 
-    def getCB(self):
-            try:
-                self.cb = xmlrpc.client.ServerProxy(
-                    "http://" + str(self.Global_cbip) + ":41414/")
-                return self.cb
-            except TimeoutError:
-                print("Connection to ComputeBox failed!")
+    def getCB(self):  # noqa: N802
+        """Compatibility alias for legacy camelCase API."""
+        return self.get_compute_box()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     device = Device()
-    device.getCB()
+    device.get_compute_box()

@@ -1,8 +1,27 @@
 from __future__ import annotations
 
+import subprocess
+import sys
+
 import pytest
 
 from onrobot.status_client import OnRobotStatusClient
+
+
+@pytest.mark.unit
+def test_package_import_does_not_require_socketio_until_status_client_instantiation() -> None:
+    script = """
+import builtins
+real_import = builtins.__import__
+def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == 'socketio':
+        raise ModuleNotFoundError(name)
+    return real_import(name, globals, locals, fromlist, level)
+builtins.__import__ = guarded_import
+import onrobot
+assert onrobot.Device is not None
+"""
+    subprocess.run([sys.executable, "-c", script], check=True)
 
 
 @pytest.mark.unit

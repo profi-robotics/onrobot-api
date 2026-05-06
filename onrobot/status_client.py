@@ -1,8 +1,12 @@
+import logging
 import threading
 import time
 from typing import Any, Callable, Dict, Optional
 
-import socketio
+from onrobot.errors import OnRobotConnectionError
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class OnRobotStatusClient:
@@ -19,6 +23,12 @@ class OnRobotStatusClient:
         self._lock = threading.Lock()
         self._latest: Dict[str, Any] = {}
         self._latest_timestamp: Optional[float] = None
+        try:
+            import socketio
+        except ModuleNotFoundError as exc:
+            raise OnRobotConnectionError(
+                "python-socketio is required for OnRobotStatusClient"
+            ) from exc
         self._sio = socketio.Client(
             reconnection=True,
             reconnection_attempts=0,
@@ -80,6 +90,6 @@ class OnRobotStatusClient:
         if self._on_update is not None:
             try:
                 self._on_update(payload)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 # Avoid crashing the socket thread due to user callbacks.
-                pass
+                LOGGER.exception("Status callback failed")
