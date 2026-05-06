@@ -1,80 +1,100 @@
 #!/usr/bin/env python3
 
-import time
+from __future__ import annotations
+
+import logging
 import threading
+import time
 import urllib.error
 import urllib.request
+import warnings
+from typing import Any
+
 from onrobot.device import Device
+from onrobot.errors import (
+    OnRobotConnectionError,
+    OnRobotTimeoutError,
+    OnRobotValidationError,
+)
+from onrobot.dimensions import get_static_dimensions
 from onrobot.gripper_profiles import get_gripper_profile
-import numpy as np
+from onrobot.policies import OperationPolicy
 
-'''
-XML-RPC library for controlling OnRobot devcies from Doosan robots
-
-Global_cbip holds the IP address of the compute box, needs to be defined by the end user
-'''
+LOGGER = logging.getLogger(__name__)
 
 # Device ID
 TWOFG_ID = 0xC0
 
-# Connection
-CONN_ERR = -2   # Connection failure
-RET_OK = 0      # Okay
-RET_FAIL = -1   # Error
+# Legacy return codes
+CONN_ERR = -2
+RET_OK = 0
+RET_FAIL = -1
 
 GRIPPER_PROFILE = get_gripper_profile("twofg7")
 
 
-class TWOFG():
-    '''
-    This class is for handling the 2FG device
-    '''
+class TWOFG:
+    """2FG gripper client with typed snake_case API + compatibility wrappers."""
+
     cb = None
 
-    def __init__(self, dev):
-        self.cb = dev.getCB()
-        self._lock = threading.Lock()  # Thread safety for XML-RPC calls
+    def __init__(self, dev: Device, policy: OperationPolicy | None = None):
+        get_cb = getattr(dev, "get_compute_box", None) or getattr(dev, "getCB")
+        self.cb = get_cb()
+        self._lock = threading.Lock()
         self._cb_ip = getattr(dev, "Global_cbip", None)
         self._status_client = None
         self._profile = GRIPPER_PROFILE
+        self._policy = policy or OperationPolicy()
 
     @property
     def profile(self):
-        """Return the gripper profile that defines the type defaults."""
         return self._profile
 
-    def _call_xmlrpc(self, method_name, *args):
-        """Thread-safe wrapper for XML-RPC calls."""
+    def _call_xmlrpc(self, method_name: str, *args: Any):
         with self._lock:
             method = getattr(self.cb, method_name)
             return method(*args)
 
-    def _call_rest(self, path, timeout_s=2.0):
+    def _call_rest(self, path: str, timeout_s: float = 2.0):
         if not self._cb_ip:
-            raise RuntimeError("Compute box IP is not configured")
+            raise OnRobotConnectionError("Compute Box IP is not configured")
         url = f"http://{self._cb_ip}/{path.lstrip('/')}"
         with self._lock:
             request = urllib.request.Request(url, method="GET")
             with urllib.request.urlopen(request, timeout=timeout_s) as response:
                 return response.read().decode("utf-8")
 
-    def start_status_stream(
-        self,
-        on_update=None,
-        timeout_s=2.0,
-    ):
+    def _require_connected(self, t_index: int = 0) -> None:
+        try:
+            connected = bool(
+                self._call_xmlrpc("cb_is_device_connected", t_index, TWOFG_ID)
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise OnRobotConnectionError("Failed to query 2FG connection status") from exc
+        if not connected:
+            raise OnRobotConnectionError("No 2FG device connected on the given index")
+
+    def _wait_until(self, predicate, timeout_s: float, timeout_message: str) -> None:
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(self._policy.poll_interval_s)
+        raise OnRobotTimeoutError(timeout_message)
+
+    def start_status_stream(self, on_update=None, timeout_s: float = 2.0) -> bool:
         if not self._cb_ip:
             return False
         if self._status_client is None:
             from onrobot.status_client import OnRobotStatusClient
-            self._status_client = OnRobotStatusClient(
-                self._cb_ip,
-                on_update=on_update,
-            )
+
+            self._status_client = OnRobotStatusClient(self._cb_ip, on_update=on_update)
         try:
             self._status_client.connect(timeout_s=timeout_s)
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("Unable to start 2FG status stream")
             return False
 
     def stop_status_stream(self):
@@ -83,11 +103,17 @@ class TWOFG():
             return
         client.disconnect()
 
-    def get_status_snapshot(self, t_index=0):
+    def get_status_snapshot(self, t_index: int = 0):
         client = self._status_client
         if client is None:
             return None
         return client.get_device_variable(device_id=t_index, product_code=TWOFG_ID)
+
+    def _safe_dimension_value(self, method_name: str, t_index: int = 0):
+        try:
+            return self._call_xmlrpc(method_name, t_index)
+        except Exception:  # noqa: BLE001
+            return None
 
     def _normalize_finger_orientation(self, orientation):
         if isinstance(orientation, bool):
@@ -110,195 +136,229 @@ class TWOFG():
             return bool(value)
         return None
 
-    def get_finger_orientation(self, t_index=0):
-        '''
-        Returns with current finger orientation
+    def get_finger_orientation(self, t_index: int = 0):
+        self._require_connected(t_index)
+        return self._call_xmlrpc("twofg_finger_orientation_outward", t_index)
 
-        @param t_index: The position of the device (0 for single, 1 for dual primary, 2 for dual secondary)
-        @return: Finger orientation flag (device-specific)
-        @rtype: int
-        '''
-        if self.isConnected(t_index) is False:
-            return CONN_ERR
-        try:
-            return self._call_xmlrpc('twofg_finger_orientation_outward', t_index)
-        except Exception:
-            return RET_FAIL
-
-    def get_finger_orientation_label(self, t_index=0):
-        '''
-        Returns finger orientation as a human-friendly label
-
-        @param t_index: The position of the device (0 for single, 1 for dual primary, 2 for dual secondary)
-        @return: "inward" or "outward" when available
-        @rtype: str
-        '''
+    def get_finger_orientation_label(self, t_index: int = 0):
         raw = self.get_finger_orientation(t_index)
         orientation = self._normalize_finger_orientation(raw)
         if orientation is None:
             return None
         return "outward" if orientation else "inward"
 
-    def set_finger_orientation(self, t_index=0, orientation=None, outward=None):
-        '''
-        Sets finger orientation
-
-        @param t_index: The position of the device (0 for single, 1 for dual primary, 2 for dual secondary)
-        @param orientation: Orientation label ("inward"/"outward") or numeric flag
-        @param outward: Boolean flag for outward orientation (True=outward)
-        @rtype: int
-        @return: RET_OK on success, RET_FAIL on error
-        '''
-        if self.isConnected(t_index) is False:
-            return CONN_ERR
-        resolved = None
+    def set_finger_orientation_value(
+        self,
+        t_index: int = 0,
+        orientation=None,
+        outward=None,
+    ) -> None:
+        self._require_connected(t_index)
         if outward is not None:
             resolved = bool(outward)
         else:
             resolved = self._normalize_finger_orientation(orientation)
         if resolved is None:
-            return RET_FAIL
+            raise OnRobotValidationError("Invalid finger orientation argument")
         try:
-            self._call_xmlrpc('twofg_set_finger_orientation', t_index, float(resolved))
-            return RET_OK
+            self._call_xmlrpc("twofg_set_finger_orientation", t_index, float(resolved))
+            return
         except Exception:
             pass
         try:
             rest_value = "true" if resolved else "false"
-            self._call_rest(
-                f"api/dc/twofg/set_finger_orientation/{t_index}/{rest_value}"
+            self._call_rest(f"api/dc/twofg/set_finger_orientation/{t_index}/{rest_value}")
+            return
+        except (urllib.error.URLError, OnRobotConnectionError) as exc:
+            raise OnRobotConnectionError("Unable to set finger orientation") from exc
+
+    def set_finger_orientation(self, t_index=0, orientation=None, outward=None):
+        try:
+            self.set_finger_orientation_value(
+                t_index=t_index,
+                orientation=orientation,
+                outward=outward,
             )
             return RET_OK
-        except (urllib.error.URLError, RuntimeError, Exception):
+        except OnRobotConnectionError:
+            return CONN_ERR
+        except Exception:  # noqa: BLE001
             return RET_FAIL
 
-    def isConnected(self, t_index=0):
-        '''
-        Returns with True if 2FG device is connected, False otherwise
+    def is_connected(self, t_index: int = 0) -> bool:
+        self._require_connected(t_index)
+        return True
 
-        @param t_index: The position of the device (0 for single, 1 for dual primary, 2 for dual secondary)
-        @return: True if connected, False otherwise
-        @rtype: bool
-        '''
+    def isConnected(self, t_index=0):  # noqa: N802
+        warnings.warn(
+            "isConnected() is deprecated; use is_connected().",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         try:
-            IsTwoFG = self._call_xmlrpc(
-                'cb_is_device_connected', t_index, TWOFG_ID)
-        except (TimeoutError, Exception):
-            IsTwoFG = False
-
-        if IsTwoFG is False:
-            print("No 2FG device connected on the given instance")
+            return self.is_connected(t_index=t_index)
+        except OnRobotConnectionError:
+            LOGGER.warning("No 2FG device connected on index %s", t_index)
             return False
-        else:
-            return True
 
-    def isBusy(self, t_index=0):
-        '''
-        Gets if the gripper is busy or not
+    def is_busy(self, t_index: int = 0):
+        self._require_connected(t_index)
+        return self._call_xmlrpc("twofg_get_busy", t_index)
 
-        @param t_index: The position of the device (0 for single, 1 for dual primary, 2 for dual secondary)
-        @type t_index: int
-
-        @rtype: bool
-        @return: True if busy, False otherwise
-        '''
-        if self.isConnected(t_index) is False:
+    def isBusy(self, t_index=0):  # noqa: N802
+        warnings.warn("isBusy() is deprecated; use is_busy().", DeprecationWarning, stacklevel=2)
+        try:
+            return self.is_busy(t_index=t_index)
+        except OnRobotConnectionError:
             return CONN_ERR
-        return self._call_xmlrpc('twofg_get_busy', t_index)
 
-    def isGripped(self, t_index=0):
-        '''
-        Gets if the gripper is gripping or not
+    def is_gripped(self, t_index: int = 0):
+        self._require_connected(t_index)
+        return self._call_xmlrpc("twofg_get_grip_detected", t_index)
 
-        @param t_index: The position of the device (0 for single, 1 for dual primary, 2 for dual secondary)
-        @type t_index: int
-
-        @rtype: bool
-        @return: True if gripped, False otherwise
-        '''
-        if self.isConnected(t_index) is False:
+    def isGripped(self, t_index=0):  # noqa: N802
+        warnings.warn(
+            "isGripped() is deprecated; use is_gripped().",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        try:
+            return self.is_gripped(t_index=t_index)
+        except OnRobotConnectionError:
             return CONN_ERR
-        return self._call_xmlrpc('twofg_get_grip_detected', t_index)
 
-    def getStatus(self, t_index=0):
-        '''
-        Gets the status of the gripper
+    def get_status(self, t_index: int = 0):
+        self._require_connected(t_index)
+        return self._call_xmlrpc("twofg_get_status", t_index)
 
-        @param t_index: The position of the device (0 for single, 1 for dual primary, 2 for dual secondary)
-        @type t_index: int
-
-        @rtype: int
-        @return: Status code of the device
-        '''
-        if self.isConnected(t_index) is False:
+    def getStatus(self, t_index=0):  # noqa: N802
+        warnings.warn(
+            "getStatus() is deprecated; use get_status().",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        try:
+            return self.get_status(t_index=t_index)
+        except OnRobotConnectionError:
             return CONN_ERR
-        status = self._call_xmlrpc('twofg_get_status', t_index)
-        return status
+
+    def get_external_width(self, t_index: int = 0):
+        self._require_connected(t_index)
+        return self._call_xmlrpc("twofg_get_external_width", t_index)
 
     def get_ext_width(self, t_index=0):
-        '''
-        Returns with current external width
-
-        @param t_index: The position of the device (0 for single, 1 for dual primary, 2 for dual secondary)
-        @return: External width in mm
-        @rtype: float
-        '''
-        if self.isConnected(t_index) is False:
+        try:
+            return self.get_external_width(t_index=t_index)
+        except OnRobotConnectionError:
             return CONN_ERR
-        extWidth = self._call_xmlrpc('twofg_get_external_width', t_index)
-        return extWidth
+
+    def get_min_external_width(self, t_index: int = 0):
+        self._require_connected(t_index)
+        return self._call_xmlrpc("twofg_get_min_external_width", t_index)
 
     def get_min_ext_width(self, t_index=0):
-        '''
-        Returns with current minimum external width
-
-        @param t_index: The position of the device (0 for single, 1 for dual primary, 2 for dual secondary)
-        @return: Minimum external width in mm
-        @rtype: float
-        '''
-        if self.isConnected(t_index) is False:
+        try:
+            return self.get_min_external_width(t_index=t_index)
+        except OnRobotConnectionError:
             return CONN_ERR
-        extMinWidth = self._call_xmlrpc(
-            'twofg_get_min_external_width', t_index)
-        return extMinWidth
+
+    def get_max_external_width(self, t_index: int = 0):
+        self._require_connected(t_index)
+        return self._call_xmlrpc("twofg_get_max_external_width", t_index)
 
     def get_max_ext_width(self, t_index=0):
-        '''
-        Returns with current maximum external width
-
-        @param t_index: The position of the device (0 for single, 1 for dual primary, 2 for dual secondary)
-        @return: Maximum external width in mm
-        @rtype: float
-        '''
-        if self.isConnected(t_index) is False:
+        try:
+            return self.get_max_external_width(t_index=t_index)
+        except OnRobotConnectionError:
             return CONN_ERR
-        extMaxWidth = self._call_xmlrpc(
-            'twofg_get_max_external_width', t_index)
-        return extMaxWidth
+
+    def get_dimensions(self, t_index: int = 0):
+        self._require_connected(t_index)
+        orientation = None
+        try:
+            orientation = self.get_finger_orientation_label(t_index)
+        except Exception:  # noqa: BLE001
+            orientation = None
+        return get_static_dimensions("twofg7").with_live_values(
+            current_width_mm=self._safe_dimension_value(
+                "twofg_get_external_width",
+                t_index,
+            ),
+            min_width_mm=self._safe_dimension_value(
+                "twofg_get_min_external_width",
+                t_index,
+            ),
+            max_width_mm=self._safe_dimension_value(
+                "twofg_get_max_external_width",
+                t_index,
+            ),
+            finger_length_mm=self._safe_dimension_value("twofg_finger_length", t_index),
+            finger_height_mm=self._safe_dimension_value("twofg_finger_height", t_index),
+            fingertip_offset_mm=self._safe_dimension_value(
+                "twofg_fingertip_offset",
+                t_index,
+            ),
+            finger_orientation=orientation,
+            live_source="Compute Box XML-RPC",
+        )
+
+    def get_force_value(self, t_index: int = 0):
+        self._require_connected(t_index)
+        return self._call_xmlrpc("twofg_get_force", t_index)
 
     def get_force(self, t_index=0):
-        '''
-        Returns with current force
-
-        @param t_index: The position of the device (0 for single, 1 for dual primary, 2 for dual secondary)
-        @return: Force in N
-        @rtype: float
-        '''
-        if self.isConnected(t_index) is False:
+        try:
+            return self.get_force_value(t_index=t_index)
+        except OnRobotConnectionError:
             return CONN_ERR
-        currForce = self._call_xmlrpc('twofg_get_force', t_index)
-        return currForce
+
+    def stop_operation(self, t_index: int = 0):
+        self._require_connected(t_index)
+        self._call_xmlrpc("twofg_stop", t_index)
 
     def stop(self, t_index=0):
-        '''
-        Stop the grippers movement
-
-        @param t_index: The position of the device (0 for single, 1 for dual primary, 2 for dual secondary)
-        @type t_index: int
-        '''
-        if self.isConnected(t_index) is False:
+        try:
+            self.stop_operation(t_index=t_index)
+        except OnRobotConnectionError:
             return CONN_ERR
-        self.cb.twofg_stop(t_index)
+
+    def grip_external(
+        self,
+        t_index: int = 0,
+        t_width: float = GRIPPER_PROFILE.open_width_default,
+        n_force: float = GRIPPER_PROFILE.force_default,
+        p_speed: int = GRIPPER_PROFILE.speed_default,
+        wait: bool = True,
+    ) -> None:
+        self._require_connected(t_index)
+        max_width = self.get_max_external_width(t_index)
+        min_width = self.get_min_external_width(t_index)
+        if t_width > max_width or t_width < min_width:
+            raise OnRobotValidationError(
+                f"Invalid width {t_width}; valid range is {min_width}-{max_width}"
+            )
+        profile = self._profile
+        if n_force > profile.force_max or n_force < profile.force_min:
+            raise OnRobotValidationError(
+                f"Invalid force {n_force}; valid range is {profile.force_min}-{profile.force_max}"
+            )
+        if p_speed > profile.speed_max or p_speed < profile.speed_min:
+            raise OnRobotValidationError(
+                f"Invalid speed {p_speed}; valid range is {profile.speed_min}-{profile.speed_max}"
+            )
+        self._call_xmlrpc("twofg_grip_external", t_index, float(t_width), int(n_force), int(p_speed))
+        if not wait:
+            return
+        self._wait_until(
+            lambda: not bool(self.is_busy(t_index)),
+            self._policy.busy_timeout_s,
+            "2FG grip command timeout",
+        )
+        self._wait_until(
+            lambda: bool(self.is_gripped(t_index)),
+            self._policy.detect_timeout_s,
+            "2FG grip detection timeout",
+        )
 
     def grip(
         self,
@@ -308,132 +368,50 @@ class TWOFG():
         p_speed=GRIPPER_PROFILE.speed_default,
         f_wait=True,
     ):
-        '''
-        Makes an external grip with the gripper to the desired position
-
-        @param t_index: The position of the device (0 for single, 1 for dual primary, 2 for dual secondary)
-        @param t_width: The width to move the gripper to in mm's
-        @type t_width: float
-        @param n_force: The force to move the gripper width in N
-        @type n_force: float
-        @param p_speed: The speed of the gripper in %
-        @type p_speed: int
-        @type f_wait: bool
-        @param f_wait: wait for the grip to end or not?
-        '''
-        if self.isConnected(t_index) is False:
-            return CONN_ERR
-
-        profile = self._profile
-
-        # Sanity check
-        max_width = self.get_max_ext_width(t_index)
-        min_width = self.get_min_ext_width(t_index)
-
-        # Check if we got valid width limits (not error codes)
-        if max_width == CONN_ERR or min_width == CONN_ERR:
-            print(
-                "Unable to retrieve gripper width limits - gripper may not be properly configured")
-            return RET_FAIL
-
-        if t_width > max_width or t_width < min_width:
-            print("Invalid 2FG width parameter, " +
-                  str(max_width)+" - "+str(min_width) + " is valid only")
-            return RET_FAIL
-
-        if n_force > profile.force_max or n_force < profile.force_min:
-            print(
-                "Invalid 2FG force parameter, "
-                f"{profile.force_min}-{profile.force_max} is valid only"
+        try:
+            self.grip_external(
+                t_index=t_index,
+                t_width=t_width,
+                n_force=n_force,
+                p_speed=p_speed,
+                wait=f_wait,
             )
-            return RET_FAIL
-        if p_speed > profile.speed_max or p_speed < profile.speed_min:
-            print(
-                "Invalid 2FG speed parameter, "
-                f"{profile.speed_min}-{profile.speed_max} is valid only"
-            )
-            return RET_FAIL
-
-        self._call_xmlrpc('twofg_grip_external', t_index, float(
-            t_width), int(n_force), int(p_speed))
-
-        if f_wait:
-            tim_cnt = 0
-            fbusy = self.isBusy(t_index)
-            while (fbusy):
-                time.sleep(0.1)
-                fbusy = self.isBusy(t_index)
-                tim_cnt += 1
-                if tim_cnt > 30:
-                    print("2FG external grip command timeout")
-                    break
-            else:
-                # Grip detection
-                grip_tim = 0
-                gripped = self.isGripped(t_index)
-                while (not gripped):
-                    time.sleep(0.1)
-                    gripped = self.isGripped(t_index)
-                    grip_tim += 1
-                    if grip_tim > 20:
-                        print("2FG external grip detection timeout")
-                        break
-                else:
-                    return RET_OK
-                return RET_FAIL
-            return RET_FAIL
-        else:
             return RET_OK
+        except OnRobotConnectionError:
+            return CONN_ERR
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("2FG grip failed: %s", exc)
+            return RET_FAIL
+
+    def move_external(self, t_index: int, t_width: float = 20.0, wait: bool = True) -> None:
+        self._require_connected(t_index)
+        max_width = self.get_max_external_width(t_index)
+        min_width = self.get_min_external_width(t_index)
+        if t_width > max_width or t_width < min_width:
+            raise OnRobotValidationError(
+                f"Invalid width {t_width}; valid range is {min_width}-{max_width}"
+            )
+        self._call_xmlrpc("twofg_grip_external", t_index, float(t_width), 100, 80)
+        if not wait:
+            return
+        self._wait_until(
+            lambda: not bool(self.is_busy(t_index)),
+            self._policy.busy_timeout_s,
+            "2FG move timeout",
+        )
 
     def move(self, t_index, t_width=20.0, f_wait=True):
-        '''
-        Moves the gripper to the desired position
-
-        @param t_index: The position of the device (0 for single, 1 for dual primary, 2 for dual secondary)
-        @param t_width: The width to move the gripper to in mm's
-        @type t_width: float
-        @type f_wait: bool
-        @param f_wait: wait for the grip to end or not?
-        '''
-        if self.isConnected(t_index) is False:
-            return CONN_ERR
-
-        max_width = self.get_max_ext_width(t_index)
-        min_width = self.get_min_ext_width(t_index)
-
-        # Check if we got valid width limits (not error codes)
-        if max_width == CONN_ERR or min_width == CONN_ERR:
-            print(
-                "Unable to retrieve gripper width limits - gripper may not be properly configured")
-            return RET_FAIL
-
-        if t_width > max_width or t_width < min_width:
-            print("Invalid 2FG diameter parameter, " +
-                  str(max_width)+" - "+str(min_width) + " is valid only")
-            return RET_FAIL
-
-        self._call_xmlrpc('twofg_grip_external', t_index,
-                          float(t_width), 100, 80)
-
-        if f_wait:
-            tim_cnt = 0
-            fbusy = self.isBusy(t_index)
-            while (fbusy):
-                time.sleep(0.1)
-                fbusy = self.isBusy(t_index)
-                tim_cnt += 1
-                if tim_cnt > 30:
-                    print("2FG external grip command timeout")
-                    break
-            else:
-                return RET_OK
-            return RET_FAIL
-        else:
+        try:
+            self.move_external(t_index=t_index, t_width=t_width, wait=f_wait)
             return RET_OK
+        except OnRobotConnectionError:
+            return CONN_ERR
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("2FG move failed: %s", exc)
+            return RET_FAIL
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     device = Device()
-    device.getCB()
-    gripper_2FG7 = TWOFG(device)
-    print("Connection check: ", gripper_2FG7.isConnected())
+    gripper_2fg7 = TWOFG(device)
+    print("Connection check:", gripper_2fg7.is_connected())
