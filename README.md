@@ -26,6 +26,18 @@ Configure repository branch protection to require the `CI` workflow before merge
 
 ---
 
+## Public Repository Safety
+
+This API can command real gripper motion and vacuum through an OnRobot Compute
+Box. Treat examples as live-hardware examples:
+
+- Keep deployment-specific IPs, credentials, and captures out of git.
+- Start with conservative force, speed, and vacuum values.
+- Confirm the robot cell is clear before actuating a gripper.
+- See `SECURITY.md` before adding logs, captures, or site-specific setup notes.
+
+---
+
 ## Gripper Status
 
 |  Status | Description  |
