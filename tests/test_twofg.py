@@ -42,7 +42,7 @@ class _FakeCB:
     def twofg_stop(self, t_index):  # noqa: ANN001, ANN201
         return None
 
-    def twofg_finger_orientation_outward(self, t_index):  # noqa: ANN001, ANN201
+    def twofg_get_finger_orientation_outward(self, t_index):  # noqa: ANN001, ANN201
         return 1
 
 
@@ -80,3 +80,10 @@ def test_twofg_legacy_connection_code() -> None:
     device.cb.connected = False
     gripper = TWOFG(device)
     assert gripper.grip() == CONN_ERR
+
+
+@pytest.mark.unit
+def test_twofg_orientation_uses_compute_box_getter_name() -> None:
+    gripper = TWOFG(_FakeDevice())
+
+    assert gripper.get_finger_orientation_label() == "inward"

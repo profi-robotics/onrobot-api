@@ -41,7 +41,7 @@ class _FakeCB:
     def twofg_fingertip_offset(self, t_index):  # noqa: ANN001, ANN201
         return 3.5
 
-    def twofg_finger_orientation_outward(self, t_index):  # noqa: ANN001, ANN201
+    def twofg_get_finger_orientation_outward(self, t_index):  # noqa: ANN001, ANN201
         return 2
 
     def rg_get_width(self, t_index):  # noqa: ANN001, ANN201

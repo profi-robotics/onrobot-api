@@ -138,7 +138,10 @@ class TWOFG:
 
     def get_finger_orientation(self, t_index: int = 0):
         self._require_connected(t_index)
-        return self._call_xmlrpc("twofg_finger_orientation_outward", t_index)
+        try:
+            return self._call_xmlrpc("twofg_get_finger_orientation_outward", t_index)
+        except Exception:  # noqa: BLE001
+            return self._call_xmlrpc("twofg_finger_orientation_outward", t_index)
 
     def get_finger_orientation_label(self, t_index: int = 0):
         raw = self.get_finger_orientation(t_index)
